@@ -1,13 +1,12 @@
 import express from "express";
-import { getUserActivity, getUserId } from "./main.controller.js";
+import { getActivity } from "./main.controller.js";
 
 const app = express();
 const port = 5000;
 
 app.use(express.json());
 
-app.post("/api/activity", getUserActivity);
-app.get("/api/myId", getUserId);
+app.post("/api/activity", getActivity);
 
 app.listen(port, () => {
   console.log("Server is running on port " + port);

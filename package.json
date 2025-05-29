@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "apify": "^3.4.2"
+  }
+}
