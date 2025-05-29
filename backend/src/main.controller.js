@@ -5,7 +5,7 @@ dotenv.config();
 
 export const getActivity = async (req, res) => {
   const token = process.env.APIFY_TOKEN;
-  const { groupIds, userNames, date } = req.body;
+  const { groupIds, userNames, date, facebookCookie } = req.body;
 
   if (
     !Array.isArray(groupIds) ||
@@ -27,6 +27,12 @@ export const getActivity = async (req, res) => {
       .json({ error: "'userNames' must be a non-empty array of strings" });
   }
 
+  if (facebookCookie && (!facebookCookie.c_user || !facebookCookie.xs)) {
+    return res
+      .status(400)
+      .json({ error: "'facebookCookie' must include both 'c_user' and 'xs'" });
+  }
+
   let parsedDate = null;
   if (date) {
     const normalized = date.includes(".")
@@ -42,14 +48,23 @@ export const getActivity = async (req, res) => {
   const result = Object.fromEntries(userNames.map((u) => [u, {}]));
 
   try {
-    const groupTasks = groupIds.map(async (groupId) => {
+    for (const groupId of groupIds) {
+      const input = {
+        resultsLimit: 100,
+        startUrls: [{ url: `https://www.facebook.com/groups/${groupId}` }],
+        viewOption: "CHRONOLOGICAL",
+      };
+
+      if (facebookCookie) {
+        input.facebookCookie = {
+          c_user: facebookCookie.c_user,
+          xs: facebookCookie.xs,
+        };
+      }
+
       const runRes = await axios.post(
         `https://api.apify.com/v2/acts/apify~facebook-groups-scraper/runs?token=${token}`,
-        {
-          resultsLimit: 1000,
-          startUrls: [{ url: `https://www.facebook.com/groups/${groupId}` }],
-          viewOption: "CHRONOLOGICAL",
-        },
+        input,
         { headers: { "Content-Type": "application/json" } }
       );
 
@@ -68,11 +83,16 @@ export const getActivity = async (req, res) => {
 
         if (status === "SUCCEEDED") break;
         if (["FAILED", "ABORTED", "TIMED-OUT"].includes(status)) {
-          throw new Error(`Actor failed for group ${groupId}: ${status}`);
+          return res.status(500).json({
+            error: `Actor failed for group ${groupId}`,
+            status,
+          });
         }
 
         if (++retries > 60) {
-          throw new Error(`Actor timeout for group ${groupId}`);
+          return res.status(500).json({
+            error: `Actor timeout for group ${groupId}`,
+          });
         }
 
         await new Promise((r) => setTimeout(r, 5000));
@@ -86,18 +106,22 @@ export const getActivity = async (req, res) => {
 
       userNames.forEach((user) => {
         const count = posts.filter((post) => {
-          const postDate = new Date(post.time).toISOString().slice(0, 10);
+          if (!post.time) return false;
+          const time = new Date(post.time);
+          if (isNaN(time.getTime())) return false;
+
+          const postDate = time.toISOString().slice(0, 10);
           return post.user?.name === user && (!isoDate || postDate === isoDate);
         }).length;
 
-        result[user][groupId] = {
+        const groupTitle = posts[0]?.groupTitle || groupId;
+
+        result[user][groupTitle] = {
           date: isoDate || null,
           count,
         };
       });
-    });
-
-    await Promise.all(groupTasks);
+    }
 
     return res.status(200).json(result);
   } catch (e) {
