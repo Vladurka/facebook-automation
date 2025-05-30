@@ -9,7 +9,7 @@ dotenv.config();
 const token = process.env.APIFY_TOKEN;
 const limit = pLimit(5);
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
-const FIFTEEN_MINUTES = 15 * 60 * 1000;
+const THIRTY_MINUTES = 30 * 60 * 1000;
 
 const _waitForRunCompletion = async (runId) => {
   let retries = 0;
@@ -37,7 +37,7 @@ const _getOrCreateActorRun = async (groupId) => {
 
   if (existing) {
     const age = Date.now() - new Date(existing.createdAt).getTime();
-    if (age < FIFTEEN_MINUTES) {
+    if (age < THIRTY_MINUTES) {
       return existing.id;
     }
 
@@ -76,11 +76,13 @@ export const getAllActivity = async (req, res) => {
 
   let groupIds = incomingGroupIds;
 
+  // Если groupIds не переданы — взять все из базы
   if (!Array.isArray(groupIds) || groupIds.length === 0) {
     const groupDocs = await Group.find().select("id -_id");
     groupIds = groupDocs.map((g) => g.id);
   }
 
+  // Валидация входных данных
   if (
     !Array.isArray(groupIds) ||
     groupIds.length === 0 ||
@@ -101,6 +103,7 @@ export const getAllActivity = async (req, res) => {
       .json({ error: "'userNames' must be a non-empty array of strings" });
   }
 
+  // Обработка и нормализация даты
   let parsedDate = null;
   if (date) {
     const normalized = date.includes(".")
@@ -113,9 +116,12 @@ export const getAllActivity = async (req, res) => {
   }
 
   const isoDate = parsedDate ? parsedDate.toISOString().slice(0, 10) : null;
+
+  // Инициализация результата
   const result = Object.fromEntries(userNames.map((u) => [u, {}]));
 
   try {
+    // Запуск скрапинга по группам
     const runResults = await Promise.all(
       groupIds.map((groupId) =>
         limit(async () => {
@@ -126,6 +132,7 @@ export const getAllActivity = async (req, res) => {
       )
     );
 
+    // Обработка полученных данных
     await Promise.all(
       runResults.map(({ groupId, datasetId }) =>
         limit(async () => {
@@ -138,16 +145,13 @@ export const getAllActivity = async (req, res) => {
 
           userNames.forEach((user) => {
             const count = countUserPosts(posts, user, isoDate);
-            result[user][groupTitle] = {
-              date: isoDate || null,
-              count,
-            };
+            result[user][groupTitle] = count;
           });
         })
       )
     );
 
-    return res.status(200).json(result);
+    return res.status(200).json({ date: isoDate, result });
   } catch (e) {
     return res.status(500).json({
       error: "Unexpected error",
