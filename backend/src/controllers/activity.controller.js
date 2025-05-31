@@ -7,7 +7,7 @@ import { Actor } from "../models/actor.model.js";
 dotenv.config();
 
 const token = process.env.APIFY_TOKEN;
-const limit = pLimit(5);
+const treadLimit = pLimit(5);
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const THIRTY_MINUTES = 30 * 60 * 1000;
 
@@ -32,7 +32,7 @@ const _waitForRunCompletion = async (runId) => {
   throw new Error("Run timeout");
 };
 
-const _getOrCreateActorRun = async (groupId) => {
+const _getOrCreateActorRun = async (groupId, limit) => {
   const existing = await Actor.findOne({ groupId });
 
   if (existing) {
@@ -45,7 +45,7 @@ const _getOrCreateActorRun = async (groupId) => {
   }
 
   const input = {
-    resultsLimit: 100,
+    resultsLimit: limit,
     startUrls: [{ url: `https://www.facebook.com/groups/${groupId}` }],
     viewOption: "CHRONOLOGICAL",
   };
@@ -72,17 +72,15 @@ const countUserPosts = (posts, userName, isoDate) =>
   }).length;
 
 export const getAllActivity = async (req, res) => {
-  const { userNames, date, groupIds: incomingGroupIds } = req.body;
+  const { userNames, date, groupIds: incomingGroupIds, limit } = req.body;
 
   let groupIds = incomingGroupIds;
 
-  // Если groupIds не переданы — взять все из базы
   if (!Array.isArray(groupIds) || groupIds.length === 0) {
     const groupDocs = await Group.find().select("id -_id");
     groupIds = groupDocs.map((g) => g.id);
   }
 
-  // Валидация входных данных
   if (
     !Array.isArray(groupIds) ||
     groupIds.length === 0 ||
@@ -103,7 +101,6 @@ export const getAllActivity = async (req, res) => {
       .json({ error: "'userNames' must be a non-empty array of strings" });
   }
 
-  // Обработка и нормализация даты
   let parsedDate = null;
   if (date) {
     const normalized = date.includes(".")
@@ -117,25 +114,22 @@ export const getAllActivity = async (req, res) => {
 
   const isoDate = parsedDate ? parsedDate.toISOString().slice(0, 10) : null;
 
-  // Инициализация результата
   const result = Object.fromEntries(userNames.map((u) => [u, {}]));
 
   try {
-    // Запуск скрапинга по группам
     const runResults = await Promise.all(
       groupIds.map((groupId) =>
-        limit(async () => {
-          const runId = await _getOrCreateActorRun(groupId);
+        treadLimit(async () => {
+          const runId = await _getOrCreateActorRun(groupId, limit);
           const datasetId = await _waitForRunCompletion(runId);
           return { groupId, datasetId };
         })
       )
     );
 
-    // Обработка полученных данных
     await Promise.all(
       runResults.map(({ groupId, datasetId }) =>
-        limit(async () => {
+        treadLimit(async () => {
           const datasetRes = await axios.get(
             `https://api.apify.com/v2/datasets/${datasetId}/items?token=${token}&clean=true`
           );
