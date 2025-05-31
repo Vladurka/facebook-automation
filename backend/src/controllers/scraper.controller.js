@@ -1,171 +1,91 @@
 import { chromium } from "playwright";
 
 export const scrapeGroup = async (req, res) => {
-  console.clear();
-  const { groupIds, userNames, date, cookies } = req.body;
+  const { groupId, cookies } = req.body;
 
-  if (
-    !Array.isArray(groupIds) ||
-    groupIds.length === 0 ||
-    !groupIds.every((id) => typeof id === "string")
-  ) {
-    return res.status(400).json({ error: "Invalid or missing 'groupIds'" });
+  if (typeof groupId !== "string" || !cookies?.c_user || !cookies?.xs) {
+    return res.status(400).json({ error: "Invalid input" });
   }
-
-  if (
-    !Array.isArray(userNames) ||
-    userNames.length === 0 ||
-    !userNames.every((name) => typeof name === "string")
-  ) {
-    return res.status(400).json({ error: "Invalid or missing 'userNames'" });
-  }
-
-  if (date) {
-    const parsed = new Date(date);
-    if (isNaN(parsed.getTime())) {
-      return res
-        .status(400)
-        .json({ error: "Invalid date format. Use YYYY-MM-DD" });
-    }
-  }
-
-  if (cookies) {
-    if (
-      typeof cookies !== "object" ||
-      typeof cookies.c_user !== "string" ||
-      typeof cookies.xs !== "string"
-    ) {
-      return res.status(400).json({
-        error:
-          "'cookies' must include 'c_user' and 'xs' as string values for Facebook login",
-      });
-    }
-  }
-
-  const result = {};
-  const userList = userNames.map((u) => u.trim());
-  const filterDate = date ? new Date(date) : null;
 
   let browser;
   try {
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
 
-    if (cookies) {
-      await context.addCookies([
-        {
-          name: "c_user",
-          value: cookies.c_user,
-          domain: ".facebook.com",
-          path: "/",
-          httpOnly: true,
-          secure: true,
-          sameSite: "Lax",
-        },
-        {
-          name: "xs",
-          value: cookies.xs,
-          domain: ".facebook.com",
-          path: "/",
-          httpOnly: true,
-          secure: true,
-          sameSite: "Lax",
-        },
-      ]);
-    }
+    await context.addCookies([
+      {
+        name: "c_user",
+        value: cookies.c_user,
+        domain: ".facebook.com",
+        path: "/",
+        httpOnly: true,
+        secure: true,
+      },
+      {
+        name: "xs",
+        value: cookies.xs,
+        domain: ".facebook.com",
+        path: "/",
+        httpOnly: true,
+        secure: true,
+      },
+    ]);
 
     const page = await context.newPage();
+    await page.goto(`https://www.facebook.com/groups/${groupId}`, {
+      waitUntil: "domcontentloaded",
+    });
 
-    for (const groupId of groupIds) {
-      await page.goto(`https://www.facebook.com/groups/${groupId}`, {
-        waitUntil: "domcontentloaded",
-      });
+    await page.evaluate(() => {
+      document.body.style.zoom = "0.75";
+    });
 
-      await page.waitForTimeout(1000);
-      await page.mouse.wheel(0, 3000);
-      await page.waitForTimeout(1000);
+    const postMap = new Map();
+    let prevHeight = 0;
+    let repeats = 0;
 
-      const rawData = await page.$$eval('div[role="article"]', (nodes) => {
-        const parseRelativeTime = (text) => {
-          const now = new Date();
-          const match = text.match(/(\d+)\s?(хв|год|дн|тиж)/i);
-          if (!match) return null;
+    while (repeats < 5) {
+      const posts = await page.$$eval('div[role="article"]', (nodes) =>
+        nodes.map((node) => {
+          const content = node.innerText?.trim() ?? "";
+          const author =
+            node.querySelector("strong a, h2 a")?.innerText?.trim() ??
+            content.match(/^([^\n]+)\n/)?.[1]?.trim() ??
+            null;
+          return { content, author };
+        })
+      );
 
-          const value = parseInt(match[1]);
-          const unit = match[2].toLowerCase();
+      for (const { content, author } of posts) {
+        if (content && content.length > 30 && author && !postMap.has(content)) {
+          postMap.set(content, author);
+        }
+      }
 
-          switch (unit) {
-            case "хв":
-              now.setMinutes(now.getMinutes() - value);
-              break;
-            case "год":
-              now.setHours(now.getHours() - value);
-              break;
-            case "дн":
-              now.setDate(now.getDate() - value);
-              break;
-            case "тиж":
-              now.setDate(now.getDate() - value * 7);
-              break;
-            default:
-              return null;
-          }
+      await page.mouse.wheel(0, 2000);
+      await page.waitForTimeout(1200);
 
-          return now.toISOString().split("T")[0];
-        };
-
-        const result = [];
-
-        nodes.forEach((node) => {
-          const rawText = node.innerText;
-          const authorMatch = rawText.match(/^([^\n]+?)\n/);
-          const timeMatch = rawText.match(/([0-9]+\s?(хв|дн|год|тиж))/i);
-
-          const author = authorMatch?.[1]?.trim();
-          const rawTime = timeMatch?.[0]?.trim();
-          const postDate = rawTime ? parseRelativeTime(rawTime) : null;
-
-          if (author && postDate) {
-            result.push({ author, date: postDate });
-          }
-        });
-
-        return result;
-      });
-
-      rawData.forEach(({ author, date: postDate }) => {
-        console.log(author, postDate);
-        if (filterDate && postDate !== filterDate.toISOString().split("T")[0])
-          return;
-
-        if (!userList.includes(author)) return;
-
-        if (!result[author]) result[author] = {};
-        result[author][groupId] = (result[author][groupId] || 0) + 1;
-      });
+      const currentHeight = await page.evaluate(
+        () => document.body.scrollHeight
+      );
+      if (currentHeight === prevHeight) {
+        repeats++;
+      } else {
+        prevHeight = currentHeight;
+        repeats = 0;
+      }
     }
 
     await browser.close();
 
-    for (const user of userList) {
-      for (const groupId of groupIds) {
-        if (!result[user]) result[user] = {};
-        if (typeof result[user][groupId] !== "number") {
-          result[user][groupId] = 0;
-        }
-      }
-    }
+    const result = Array.from(postMap.entries()).map(([content, author]) => ({
+      author,
+      content,
+    }));
 
-    return res.status(200).json({
-      date: filterDate ? filterDate.toISOString().split("T")[0] : null,
-      result,
-    });
+    return res.status(200).json({ posts: result });
   } catch (error) {
     if (browser) await browser.close();
-    console.error("❌ Scraping error:", error);
-    return res.status(500).json({
-      error: "Internal server error during scraping",
-      details: error.message,
-    });
+    return res.status(500).json({ error: error.message });
   }
 };

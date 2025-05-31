@@ -3,6 +3,6 @@ import { scrapeGroup } from "../controllers/scraper.controller.js";
 
 const router = express.Router();
 
-router.post("/", scrapeGroup);
+router.post("/get", scrapeGroup);
 
 export default router;
