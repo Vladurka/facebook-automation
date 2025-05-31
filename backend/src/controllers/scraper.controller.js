@@ -33,7 +33,10 @@ export const scrapeGroup = async (req, res) => {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: false,
+      slowMo: 100,
+    });
     const context = await browser.newContext();
     await context.addCookies([
       {
@@ -67,17 +70,21 @@ export const scrapeGroup = async (req, res) => {
 
       const seenPosts = new Set();
       const counts = new Map();
+
       let prevHeight = 0;
       let repeats = 0;
+      let reachedLimit = false;
 
-      while (repeats < 5) {
+      while (!reachedLimit && repeats < 5) {
         const posts = await page.$$eval('div[role="article"]', (nodes) => {
           const parseRelativeTime = (text) => {
             const now = new Date();
             const match = text.match(/(\d+)\s?(хв|год|дн|тиж)/i);
             if (!match) return null;
-            const value = parseInt(match[1]);
+
+            const value = Number(match[1]);
             const unit = match[2].toLowerCase();
+
             switch (unit) {
               case "хв":
                 now.setMinutes(now.getMinutes() - value);
@@ -94,32 +101,33 @@ export const scrapeGroup = async (req, res) => {
               default:
                 return null;
             }
-            return now.toISOString().split("T")[0];
+            return now.getTime();
           };
 
           return nodes.map((node) => {
-            const rawText = node.innerText;
+            const rawText = node.innerText ?? "";
             const authorMatch = rawText.match(/^([^\n]+?)\n/);
             const timeMatch = rawText.match(/([0-9]+\s?(хв|дн|год|тиж))/i);
 
-            const content = rawText?.trim() ?? "";
-            const author = authorMatch?.[1]?.trim() ?? null;
-            const date = timeMatch ? parseRelativeTime(timeMatch[0]) : null;
-
-            return { content, author, date };
+            return {
+              content: rawText.trim(),
+              author: authorMatch?.[1]?.trim() ?? null,
+              ts: timeMatch ? parseRelativeTime(timeMatch[0]) : null,
+            };
           });
         });
 
-        for (const { content, author, date: postDate } of posts) {
-          if (
-            !content ||
-            content.length < 30 ||
-            !author ||
-            !userList.includes(author)
-          )
-            continue;
-          if (filterDate && postDate !== filterDate.toISOString().split("T")[0])
-            continue;
+        for (const post of posts) {
+          const { content, author, ts } = post;
+          const postDate = ts ? new Date(ts) : null;
+
+          if (filterDate && postDate && postDate < filterDate) {
+            reachedLimit = true;
+            break;
+          }
+
+          if (!content || content.length < 30) continue;
+          if (!author || !userList.includes(author)) continue;
 
           if (!seenPosts.has(content)) {
             seenPosts.add(content);
@@ -129,6 +137,8 @@ export const scrapeGroup = async (req, res) => {
           }
         }
 
+        if (reachedLimit) break;
+
         await page.mouse.wheel(0, 2000);
         await page.waitForTimeout(1200);
 
@@ -136,7 +146,7 @@ export const scrapeGroup = async (req, res) => {
           () => document.body.scrollHeight
         );
         if (currentHeight === prevHeight) {
-          repeats++;
+          repeats += 1;
         } else {
           prevHeight = currentHeight;
           repeats = 0;
