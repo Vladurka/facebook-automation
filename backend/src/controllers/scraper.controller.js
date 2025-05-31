@@ -174,3 +174,102 @@ export const scrapeGroup = async (req, res) => {
     });
   }
 };
+
+export const postToGroups = async (req, res) => {
+  const { groupIds, message, cookies } = req.body;
+
+  // Валідація вхідних даних
+  if (
+    !Array.isArray(groupIds) ||
+    groupIds.some((id) => typeof id !== "string")
+  ) {
+    return res.status(400).json({ error: "Invalid or missing 'groupIds'" });
+  }
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ error: "Missing or invalid 'message'" });
+  }
+  if (!cookies?.c_user || !cookies?.xs) {
+    return res.status(400).json({ error: "Missing required Facebook cookies" });
+  }
+
+  let browser;
+  const posted = [];
+
+  try {
+    browser = await chromium.launch({ headless: false, slowMo: 100 });
+    const context = await browser.newContext();
+
+    // Додаємо Facebook cookies
+    await context.addCookies([
+      {
+        name: "c_user",
+        value: cookies.c_user,
+        domain: ".facebook.com",
+        path: "/",
+        httpOnly: true,
+        secure: true,
+      },
+      {
+        name: "xs",
+        value: cookies.xs,
+        domain: ".facebook.com",
+        path: "/",
+        httpOnly: true,
+        secure: true,
+      },
+    ]);
+
+    const page = await context.newPage();
+
+    for (const groupId of groupIds) {
+      try {
+        await page.goto(`https://www.facebook.com/groups/${groupId}`, {
+          waitUntil: "domcontentloaded",
+        });
+
+        await page.waitForTimeout(3000);
+        await page.mouse.wheel(0, 800);
+        await page.waitForTimeout(2000);
+
+        const postBoxTrigger = await page
+          .locator('div[role="button"]:has(div:has-text("Напишіть щось"))')
+          .first();
+
+        if (!(await postBoxTrigger.isVisible())) {
+          throw new Error("Active field 'Write something' not found");
+        }
+
+        await postBoxTrigger.click();
+
+        await page.waitForTimeout(1000);
+
+        await page.keyboard.type(message, { delay: 20 });
+
+        await page.waitForTimeout(1000);
+
+        const publishBtn = await page
+          .locator('div[aria-label="Опублікувати"]')
+          .first();
+        if (!(await publishBtn.isVisible())) {
+          throw new Error("Button 'Publish' не знайдено");
+        }
+
+        await publishBtn.click();
+        await page.waitForTimeout(3000);
+
+        posted.push({ groupId, status: "success" });
+      } catch (err) {
+        posted.push({ groupId, status: "failed", error: err.message });
+      }
+    }
+
+    await browser.close();
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    if (browser) await browser.close();
+    return res.status(500).json({
+      error: "Failed to post to groups",
+      details: err.message,
+    });
+  }
+};
