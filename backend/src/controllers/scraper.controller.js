@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 import { Group } from "../models/group.model.js";
 import { User } from "../models/user.model.js";
 import { Account } from "../models/account.model.js";
+import { saveResultToExcel } from "../utils/excel.js";
 
 const _getCookies = async (body) => {
   const { account, cookies } = body;
@@ -215,6 +216,10 @@ export const scrapeGroup = async (req, res) => {
         finalResult[user][label] = count;
       }
     }
+    await saveResultToExcel(
+      finalResult,
+      filterDate?.toISOString().split("T")[0]
+    );
 
     return res.status(200).json({
       date: filterDate ? filterDate.toISOString().split("T")[0] : null,

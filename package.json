@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "apify": "^3.4.2"
+    "apify": "^3.4.2",
+    "exceljs": "^4.4.0"
   }
 }
