@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import pLimit from "p-limit";
 import { Group } from "../models/group.model.js";
 import { Actor } from "../models/actor.model.js";
+import { User } from "../models/user.model.js";
 
 dotenv.config();
 
@@ -17,7 +18,6 @@ const _waitForRunCompletion = async (runId) => {
     const { data } = await axios.get(
       `https://api.apify.com/v2/actor-runs/${runId}?token=${token}`
     );
-
     const { status, defaultDatasetId } = data.data;
 
     if (status === "SUCCEEDED") return defaultDatasetId;
@@ -35,13 +35,10 @@ const _waitForRunCompletion = async (runId) => {
 const _getOrCreateActorRun = async (groupId, limit) => {
   const existing = await Actor.findOne({ groupId });
 
-  if (existing) {
+  if (existing?.createdAt) {
     const age = Date.now() - new Date(existing.createdAt).getTime();
-    if (age < THIRTY_MINUTES) {
-      return existing.id;
-    }
-
-    await Actor.deleteOne({ _id: existing._id });
+    if (age < THIRTY_MINUTES) return existing.id;
+    await Actor.deleteOne({ groupId });
   }
 
   const input = {
@@ -57,66 +54,55 @@ const _getOrCreateActorRun = async (groupId, limit) => {
   );
 
   const runId = runRes.data.data.id;
-
   await Actor.create({ id: runId, groupId });
+
   return runId;
 };
 
 const countUserPosts = (posts, userName, isoDate) =>
   posts.filter((post) => {
-    if (!post.time) return false;
+    if (!post.time || post.user?.name !== userName) return false;
+
     const postTime = new Date(post.time);
     if (isNaN(postTime)) return false;
+
     const postDate = postTime.toISOString().slice(0, 10);
-    return post.user?.name === userName && (!isoDate || postDate === isoDate);
+    return !isoDate || postDate === isoDate;
   }).length;
 
 export const getAllActivity = async (req, res) => {
-  const { userNames, date, groupIds: incomingGroupIds, limit } = req.body;
-
-  let groupIds = incomingGroupIds;
-
-  if (!Array.isArray(groupIds) || groupIds.length === 0) {
-    const groupDocs = await Group.find().select("id -_id");
-    groupIds = groupDocs.map((g) => g.id);
-  }
-
-  if (
-    !Array.isArray(groupIds) ||
-    groupIds.length === 0 ||
-    !groupIds.every((id) => typeof id === "string")
-  ) {
-    return res
-      .status(400)
-      .json({ error: "'groupIds' must be a non-empty array of strings" });
-  }
-
-  if (
-    !Array.isArray(userNames) ||
-    userNames.length === 0 ||
-    !userNames.every((name) => typeof name === "string")
-  ) {
-    return res
-      .status(400)
-      .json({ error: "'userNames' must be a non-empty array of strings" });
-  }
-
-  let parsedDate = null;
-  if (date) {
-    const normalized = date.includes(".")
-      ? date.split(".").reverse().join("-")
-      : date;
-    parsedDate = new Date(normalized);
-    if (isNaN(parsedDate.getTime())) {
-      return res.status(400).json({ error: "Invalid 'date' format" });
-    }
-  }
-
-  const isoDate = parsedDate ? parsedDate.toISOString().slice(0, 10) : null;
-
-  const result = Object.fromEntries(userNames.map((u) => [u, {}]));
+  const {
+    userNames: inputUserNames,
+    date,
+    groupIds: incomingGroupIds,
+    limit = 20,
+  } = req.body;
 
   try {
+    const groupIds =
+      Array.isArray(incomingGroupIds) && incomingGroupIds.length > 0
+        ? incomingGroupIds
+        : (await Group.find().select("id -_id")).map((u) => u.id);
+
+    const userNames =
+      Array.isArray(inputUserNames) && inputUserNames.length > 0
+        ? inputUserNames
+        : (await User.find().select("nickname -_id")).map((u) => u.nickname);
+
+    let isoDate = null;
+    if (date) {
+      const normalized = date.includes(".")
+        ? date.split(".").reverse().join("-")
+        : date;
+      const parsed = new Date(normalized);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: "Invalid 'date' format" });
+      }
+      isoDate = parsed.toISOString().slice(0, 10);
+    }
+
+    const result = Object.fromEntries(userNames.map((u) => [u, {}]));
+
     const runResults = await Promise.all(
       groupIds.map((groupId) =>
         treadLimit(async () => {
@@ -130,23 +116,24 @@ export const getAllActivity = async (req, res) => {
     await Promise.all(
       runResults.map(({ groupId, datasetId }) =>
         treadLimit(async () => {
-          const datasetRes = await axios.get(
+          const { data: posts } = await axios.get(
             `https://api.apify.com/v2/datasets/${datasetId}/items?token=${token}&clean=true`
           );
 
-          const posts = datasetRes.data;
+          if (!Array.isArray(posts)) throw new Error("Invalid dataset format");
+
           const groupTitle = posts[0]?.groupTitle || groupId;
 
-          userNames.forEach((user) => {
-            const count = countUserPosts(posts, user, isoDate);
-            result[user][groupTitle] = count;
-          });
+          for (const user of userNames) {
+            result[user][groupTitle] = countUserPosts(posts, user, isoDate);
+          }
         })
       )
     );
 
     return res.status(200).json({ date: isoDate, result });
   } catch (e) {
+    console.error("Activity fetch error:", e);
     return res.status(500).json({
       error: "Unexpected error",
       details: e.message,

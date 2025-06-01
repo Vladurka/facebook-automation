@@ -1,8 +1,35 @@
 import { chromium } from "playwright";
+import { Group } from "../models/group.model.js";
+import { User } from "../models/user.model.js";
+import { Account } from "../models/account.model.js";
+
+const _getCookies = async (body) => {
+  const { account, cookies } = body;
+  if (cookies) return { c_user: cookies.c_user, xs: cookies.xs };
+  const accountData = await Account.findOne({ nickname: account }).select(
+    "c_user xs -_id"
+  );
+  if (!accountData) return null;
+  return { c_user: accountData.c_user, xs: accountData.xs };
+};
 
 export const scrapeGroup = async (req, res) => {
   console.clear();
-  const { groupIds, userNames, date, cookies } = req.body;
+  const {
+    groupIds: incomingGroupIds,
+    userNames: inputUserNames,
+    date,
+  } = req.body;
+
+  const groupIds =
+    Array.isArray(incomingGroupIds) && incomingGroupIds.length > 0
+      ? incomingGroupIds
+      : (await Group.find().select("id -_id")).map((u) => u.id);
+
+  const userNames =
+    Array.isArray(inputUserNames) && inputUserNames.length > 0
+      ? inputUserNames
+      : (await User.find().select("nickname -_id")).map((u) => u.nickname);
 
   if (
     !Array.isArray(groupIds) ||
@@ -21,6 +48,8 @@ export const scrapeGroup = async (req, res) => {
       .status(400)
       .json({ error: "Invalid date format. Use YYYY-MM-DD" });
   }
+
+  const cookies = await _getCookies(req.body);
   if (!cookies?.c_user || !cookies?.xs) {
     return res
       .status(400)
@@ -33,10 +62,7 @@ export const scrapeGroup = async (req, res) => {
 
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: false,
-      slowMo: 100,
-    });
+    browser = await chromium.launch({ headless: false, slowMo: 100 });
     const context = await browser.newContext();
     await context.addCookies([
       {
@@ -70,7 +96,6 @@ export const scrapeGroup = async (req, res) => {
 
       const seenPosts = new Set();
       const counts = new Map();
-
       let prevHeight = 0;
       let repeats = 0;
       let reachedLimit = false;
@@ -84,7 +109,6 @@ export const scrapeGroup = async (req, res) => {
 
             const value = Number(match[1]);
             const unit = match[2].toLowerCase();
-
             switch (unit) {
               case "хв":
                 now.setMinutes(now.getMinutes() - value);
@@ -130,6 +154,14 @@ export const scrapeGroup = async (req, res) => {
           if (!author || !userList.includes(author)) continue;
 
           if (!seenPosts.has(content)) {
+            if (filterDate && postDate) {
+              const startOfDay = new Date(filterDate);
+              startOfDay.setHours(0, 0, 0, 0);
+              const endOfDay = new Date(filterDate);
+              endOfDay.setHours(23, 59, 59, 999);
+              if (postDate < startOfDay || postDate > endOfDay) continue;
+            }
+
             seenPosts.add(content);
             if (!counts.has(author)) counts.set(author, {});
             counts.get(author)[groupId] =
@@ -161,9 +193,32 @@ export const scrapeGroup = async (req, res) => {
 
     await browser.close();
 
+    const groupIdSet = new Set();
+    Object.values(result).forEach((groupMap) =>
+      Object.keys(groupMap).forEach((groupId) => groupIdSet.add(groupId))
+    );
+    const allGroupIds = Array.from(groupIdSet);
+    const groupsFromDb = await Group.find({ id: { $in: allGroupIds } }).select(
+      "id name -_id"
+    );
+
+    const groupNamesMap = {};
+    groupsFromDb.forEach((g) => {
+      groupNamesMap[g.id] = g.name;
+    });
+
+    const finalResult = {};
+    for (const [user, groups] of Object.entries(result)) {
+      finalResult[user] = {};
+      for (const [groupId, count] of Object.entries(groups)) {
+        const label = groupNamesMap[groupId] || groupId;
+        finalResult[user][label] = count;
+      }
+    }
+
     return res.status(200).json({
       date: filterDate ? filterDate.toISOString().split("T")[0] : null,
-      result,
+      result: finalResult,
     });
   } catch (error) {
     if (browser) await browser.close();
@@ -178,7 +233,6 @@ export const scrapeGroup = async (req, res) => {
 export const postToGroups = async (req, res) => {
   const { groupIds, message, cookies } = req.body;
 
-  // Валідація вхідних даних
   if (
     !Array.isArray(groupIds) ||
     groupIds.some((id) => typeof id !== "string")
@@ -199,7 +253,6 @@ export const postToGroups = async (req, res) => {
     browser = await chromium.launch({ headless: false, slowMo: 100 });
     const context = await browser.newContext();
 
-    // Додаємо Facebook cookies
     await context.addCookies([
       {
         name: "c_user",
