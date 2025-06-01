@@ -5,9 +5,15 @@ import groupRoutes from "./routes/group.route.js";
 import userRoutes from "./routes/user.route.js";
 import accountRoutes from "./routes/account.route.js";
 import { connectDB } from "./utils/db.js";
+import cors from "cors";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
-const port = 5000;
+const port = process.env.PORT || 5000;
+
+app.use(cors());
 
 app.use(express.json());
 
