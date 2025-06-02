@@ -15,7 +15,8 @@ const _getCookies = async (body) => {
 };
 
 export const scrapeGroup = async (req, res) => {
-  console.clear();
+  console.log("🚀 Starting group scraping...");
+
   const {
     groupIds: incomingGroupIds,
     userNames: inputUserNames,
@@ -36,15 +37,20 @@ export const scrapeGroup = async (req, res) => {
     !Array.isArray(groupIds) ||
     groupIds.some((id) => typeof id !== "string")
   ) {
+    console.error("❗ Invalid or missing groupIds");
     return res.status(400).json({ error: "Invalid or missing 'groupIds'" });
   }
+
   if (
     !Array.isArray(userNames) ||
     userNames.some((n) => typeof n !== "string")
   ) {
+    console.error("❗ Invalid or missing userNames");
     return res.status(400).json({ error: "Invalid or missing 'userNames'" });
   }
+
   if (date && isNaN(new Date(date).getTime())) {
+    console.error("❗📅 Invalid date format received");
     return res
       .status(400)
       .json({ error: "Invalid date format. Use YYYY-MM-DD" });
@@ -52,6 +58,7 @@ export const scrapeGroup = async (req, res) => {
 
   const cookies = await _getCookies(req.body);
   if (!cookies?.c_user || !cookies?.xs) {
+    console.error("❗🍪 Missing Facebook cookies");
     return res
       .status(400)
       .json({ error: "Missing required Facebook cookies: 'c_user' and 'xs'" });
@@ -64,6 +71,7 @@ export const scrapeGroup = async (req, res) => {
   let browser;
   try {
     browser = await chromium.launch({ headless: true });
+    console.log("🌐 Browser launched");
     const context = await browser.newContext();
     await context.addCookies([
       {
@@ -87,6 +95,7 @@ export const scrapeGroup = async (req, res) => {
     const page = await context.newPage();
 
     for (const groupId of groupIds) {
+      console.log(`📂 Visiting group: ${groupId}`);
       await page.goto(`https://www.facebook.com/groups/${groupId}`, {
         waitUntil: "domcontentloaded",
       });
@@ -193,6 +202,7 @@ export const scrapeGroup = async (req, res) => {
     }
 
     await browser.close();
+    console.log("✅ Scraping complete");
 
     const groupIdSet = new Set();
     Object.values(result).forEach((groupMap) =>
@@ -216,10 +226,12 @@ export const scrapeGroup = async (req, res) => {
         finalResult[user][label] = count;
       }
     }
+
     await saveResultToExcel(
       finalResult,
       filterDate?.toISOString().split("T")[0]
     );
+    console.log("📁 Saved result to Excel");
 
     return res.status(200).json({
       date: filterDate ? filterDate.toISOString().split("T")[0] : null,
@@ -227,7 +239,7 @@ export const scrapeGroup = async (req, res) => {
     });
   } catch (error) {
     if (browser) await browser.close();
-    console.error("❌ Scraping error:", error);
+    console.error("❌ Scraping error:", error.message);
     return res.status(500).json({
       error: "Internal server error during scraping",
       details: error.message,
@@ -236,18 +248,28 @@ export const scrapeGroup = async (req, res) => {
 };
 
 export const postToGroups = async (req, res) => {
-  const { groupIds, message, cookies } = req.body;
+  const { groupIds: incomingGroupIds, message } = req.body;
+  const groupIds =
+    Array.isArray(incomingGroupIds) && incomingGroupIds.length > 0
+      ? incomingGroupIds
+      : (await Group.find().select("id -_id")).map((u) => u.id);
 
   if (
     !Array.isArray(groupIds) ||
     groupIds.some((id) => typeof id !== "string")
   ) {
+    console.error("❗ Invalid or missing groupIds for posting");
     return res.status(400).json({ error: "Invalid or missing 'groupIds'" });
   }
+
   if (typeof message !== "string" || !message.trim()) {
+    console.error("❗ Message is missing or invalid");
     return res.status(400).json({ error: "Missing or invalid 'message'" });
   }
+
+  const cookies = await _getCookies(req.body);
   if (!cookies?.c_user || !cookies?.xs) {
+    console.error("❗🍪 Missing Facebook cookies for posting");
     return res.status(400).json({ error: "Missing required Facebook cookies" });
   }
 
@@ -256,6 +278,7 @@ export const postToGroups = async (req, res) => {
 
   try {
     browser = await chromium.launch({ headless: true });
+    console.log("🌐 Browser launched for posting");
     const context = await browser.newContext();
 
     await context.addCookies([
@@ -281,6 +304,7 @@ export const postToGroups = async (req, res) => {
 
     for (const groupId of groupIds) {
       try {
+        console.log(`📝 Posting to group: ${groupId}`);
         await page.goto(`https://www.facebook.com/groups/${groupId}`, {
           waitUntil: "domcontentloaded",
         });
@@ -293,38 +317,39 @@ export const postToGroups = async (req, res) => {
           .locator('div[role="button"]:has(div:has-text("Напишіть щось"))')
           .first();
 
-        if (!(await postBoxTrigger.isVisible())) {
+        if (!(await postBoxTrigger.isVisible()))
           throw new Error("Active field 'Write something' not found");
-        }
 
         await postBoxTrigger.click();
-
         await page.waitForTimeout(1000);
 
         await page.keyboard.type(message, { delay: 20 });
-
         await page.waitForTimeout(1000);
 
         const publishBtn = await page
           .locator('div[aria-label="Опублікувати"]')
           .first();
-        if (!(await publishBtn.isVisible())) {
-          throw new Error("Button 'Publish' не знайдено");
-        }
+
+        if (!(await publishBtn.isVisible()))
+          throw new Error("Button 'Publish' not found");
 
         await publishBtn.click();
         await page.waitForTimeout(3000);
 
+        console.log(`✅ Posted to ${groupId}`);
         posted.push({ groupId, status: "success" });
       } catch (err) {
+        console.error(`❌ Failed to post to ${groupId}: ${err.message}`);
         posted.push({ groupId, status: "failed", error: err.message });
       }
     }
 
     await browser.close();
+    console.log("📤 Posting complete");
     return res.status(200).json({ success: true });
   } catch (err) {
     if (browser) await browser.close();
+    console.error("❌ Posting error:", err.message);
     return res.status(500).json({
       error: "Failed to post to groups",
       details: err.message,
