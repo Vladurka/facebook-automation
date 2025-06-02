@@ -1,6 +1,5 @@
 import ExcelJS from "exceljs";
-import path from "path";
-import fs from "fs";
+import { sendFileToTelegram } from "./telegram.js";
 
 export const saveResultToExcel = async (result, date = null) => {
   const workbook = new ExcelJS.Workbook();
@@ -14,7 +13,6 @@ export const saveResultToExcel = async (result, date = null) => {
   });
 
   const groups = Array.from(groupSet);
-
   worksheet.addRow(["User", ...groups]);
 
   for (const user of users) {
@@ -26,10 +24,6 @@ export const saveResultToExcel = async (result, date = null) => {
   }
 
   const fileName = `${date || Date.now()}.xlsx`;
-  const filePath = path.join("./reports", fileName);
-
-  fs.mkdirSync("./reports", { recursive: true });
-
-  await workbook.xlsx.writeFile(filePath);
-  return filePath;
+  const buffer = await workbook.xlsx.writeBuffer();
+  await sendFileToTelegram(buffer, fileName);
 };
