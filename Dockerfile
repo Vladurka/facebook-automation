@@ -8,8 +8,6 @@ RUN npm install
 
 COPY backend .
 
-COPY backend/.env .env
-
 EXPOSE 5000
 
 CMD ["npm", "start"]
