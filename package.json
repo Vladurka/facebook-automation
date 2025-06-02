@@ -1,7 +1,0 @@
-{
-  "dependencies": {
-    "apify": "^3.4.2",
-    "cors": "^2.8.5",
-    "exceljs": "^4.4.0"
-  }
-}
