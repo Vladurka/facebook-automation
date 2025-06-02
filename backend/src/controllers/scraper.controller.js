@@ -63,7 +63,7 @@ export const scrapeGroup = async (req, res) => {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: false, slowMo: 100 });
+    browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
     await context.addCookies([
       {
@@ -255,7 +255,7 @@ export const postToGroups = async (req, res) => {
   const posted = [];
 
   try {
-    browser = await chromium.launch({ headless: false, slowMo: 100 });
+    browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
 
     await context.addCookies([
