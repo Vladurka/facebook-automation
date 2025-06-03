@@ -3,6 +3,7 @@ import { Group } from "../models/group.model.js";
 import { User } from "../models/user.model.js";
 import { Account } from "../models/account.model.js";
 import { saveResultToExcel } from "../utils/excel.js";
+import { sendMessageToTelegram } from "../utils/telegram.js";
 
 const _getCookies = async (body) => {
   const { account, cookies } = body;
@@ -321,7 +322,7 @@ export const postToGroups = async (req, res) => {
           throw new Error("Active field 'Write something' not found");
 
         await postBoxTrigger.click();
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(10000);
 
         await page.keyboard.type(message, { delay: 20 });
         await page.waitForTimeout(1000);
@@ -336,17 +337,30 @@ export const postToGroups = async (req, res) => {
         await publishBtn.click();
         await page.waitForTimeout(3000);
 
-        console.log(`✅ Posted to ${groupId}`);
-        posted.push({ groupId, status: "success" });
+        const group = await Group.findOne({ id: groupId });
+        const groupName = group?.name || groupId;
+
+        console.log(`✅ Posted to ${groupName}`);
+        posted.push({ groupName, status: "success" });
       } catch (err) {
-        console.error(`❌ Failed to post to ${groupId}: ${err.message}`);
-        posted.push({ groupId, status: "failed", error: err.message });
+        const group = await Group.findOne({ id: groupId });
+        const groupName = group?.name || groupId;
+        console.error(`❌ Failed to post to ${groupName}: ${err.message}`);
+        posted.push({ groupName, status: "failed", error: err.message });
       }
     }
 
     await browser.close();
     console.log("📤 Posting complete");
-    return res.status(200).json({ success: true });
+    await sendMessageToTelegram(
+      `✅ Posted ${posted.filter((p) => p.status === "success").length}/${
+        posted.length
+      }: ${posted
+        .filter((p) => p.status === "success")
+        .map((p) => p.groupName)
+        .join(", ")}`
+    );
+    return res.status(200).json(posted);
   } catch (err) {
     if (browser) await browser.close();
     console.error("❌ Posting error:", err.message);
