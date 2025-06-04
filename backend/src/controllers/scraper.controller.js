@@ -360,9 +360,9 @@ export const postToGroups = async (req, res) => {
     console.log("📤 Posting complete");
 
     await sendMessageToTelegram(
-      `✅ Опубліковано ${posted.filter((p) => p.status === "success").length}/${
-        posted.length
-      }: ${posted
+      `✅ Повідомлення "${message}" опубліковано до груп: ${
+        posted.filter((p) => p.status === "success").length
+      }/${posted.length}: ${posted
         .filter((p) => p.status === "success")
         .map((p) => p.groupName)
         .join(", ")}`
