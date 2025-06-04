@@ -250,6 +250,7 @@ export const scrapeGroup = async (req, res) => {
 
 export const postToGroups = async (req, res) => {
   const { groupIds: incomingGroupIds, message } = req.body;
+
   const groupIds =
     Array.isArray(incomingGroupIds) && incomingGroupIds.length > 0
       ? incomingGroupIds
@@ -280,37 +281,38 @@ export const postToGroups = async (req, res) => {
   try {
     browser = await chromium.launch({ headless: true });
     console.log("🌐 Browser launched for posting");
-    const context = await browser.newContext();
-
-    await context.addCookies([
-      {
-        name: "c_user",
-        value: cookies.c_user,
-        domain: ".facebook.com",
-        path: "/",
-        httpOnly: true,
-        secure: true,
-      },
-      {
-        name: "xs",
-        value: cookies.xs,
-        domain: ".facebook.com",
-        path: "/",
-        httpOnly: true,
-        secure: true,
-      },
-    ]);
-
-    const page = await context.newPage();
 
     for (const groupId of groupIds) {
+      const context = await browser.newContext();
+
+      await context.addCookies([
+        {
+          name: "c_user",
+          value: cookies.c_user,
+          domain: ".facebook.com",
+          path: "/",
+          httpOnly: true,
+          secure: true,
+        },
+        {
+          name: "xs",
+          value: cookies.xs,
+          domain: ".facebook.com",
+          path: "/",
+          httpOnly: true,
+          secure: true,
+        },
+      ]);
+
+      const page = await context.newPage();
+
       try {
         console.log(`📝 Posting to group: ${groupId}`);
         await page.goto(`https://www.facebook.com/groups/${groupId}`, {
           waitUntil: "domcontentloaded",
         });
 
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
         await page.mouse.wheel(0, 800);
         await page.waitForTimeout(2000);
 
@@ -318,11 +320,12 @@ export const postToGroups = async (req, res) => {
           .locator('div[role="button"]:has(div:has-text("Напишіть щось"))')
           .first();
 
-        if (!(await postBoxTrigger.isVisible()))
+        if (!(await postBoxTrigger.isVisible())) {
           throw new Error("Active field 'Write something' not found");
+        }
 
         await postBoxTrigger.click();
-        await page.waitForTimeout(10000);
+        await page.waitForTimeout(8000);
 
         await page.keyboard.type(message, { delay: 20 });
         await page.waitForTimeout(1000);
@@ -335,7 +338,6 @@ export const postToGroups = async (req, res) => {
           throw new Error("Button 'Publish' not found");
 
         await publishBtn.click();
-        await page.waitForTimeout(3000);
 
         const group = await Group.findOne({ id: groupId });
         const groupName = group?.name || groupId;
@@ -347,23 +349,30 @@ export const postToGroups = async (req, res) => {
         const groupName = group?.name || groupId;
         console.error(`❌ Failed to post to ${groupName}: ${err.message}`);
         posted.push({ groupName, status: "failed", error: err.message });
+      } finally {
+        await page.close();
+        await context.close();
+        await new Promise((r) => setTimeout(r, 3000));
       }
     }
 
     await browser.close();
     console.log("📤 Posting complete");
+
     await sendMessageToTelegram(
-      `✅ Posted ${posted.filter((p) => p.status === "success").length}/${
+      `✅ Опубліковано ${posted.filter((p) => p.status === "success").length}/${
         posted.length
       }: ${posted
         .filter((p) => p.status === "success")
         .map((p) => p.groupName)
         .join(", ")}`
     );
+
     return res.status(200).json(posted);
   } catch (err) {
     if (browser) await browser.close();
-    console.error("❌ Posting error:", err.message);
+    console.error("❌ Помилка при публікації:", err.message);
+    await sendMessageToTelegram(`❌ Помилка при публікації: ${err.message}`);
     return res.status(500).json({
       error: "Failed to post to groups",
       details: err.message,
