@@ -249,7 +249,7 @@ export const scrapeGroup = async (req, res) => {
 };
 
 export const postToGroups = async (req, res) => {
-  const { groupIds: incomingGroupIds, message } = req.body;
+  const { groupIds: incomingGroupIds, message, account } = req.body;
 
   const groupIds =
     Array.isArray(incomingGroupIds) && incomingGroupIds.length > 0
@@ -269,7 +269,9 @@ export const postToGroups = async (req, res) => {
     return res.status(400).json({ error: "Missing or invalid 'message'" });
   }
 
-  const cookies = await _getCookies(req.body);
+  const cookies = await Account.findOne({ nickname: account }).select(
+    "c_user xs"
+  );
   if (!cookies?.c_user || !cookies?.xs) {
     console.error("❗🍪 Missing Facebook cookies for posting");
     return res.status(400).json({ error: "Missing required Facebook cookies" });
@@ -360,7 +362,7 @@ export const postToGroups = async (req, res) => {
     console.log("📤 Posting complete");
 
     await sendMessageToTelegram(
-      `✅ Повідомлення "${message}" опубліковано до груп: ${
+      `✅ Повідомлення "${message}" опубліковано з аккаунту ${account} до груп ${
         posted.filter((p) => p.status === "success").length
       }/${posted.length}: ${posted
         .filter((p) => p.status === "success")

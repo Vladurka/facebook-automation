@@ -14,7 +14,7 @@ export const sendFileToTelegram = async (fileContent, filename) => {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
 
-    const res = await axios.post(
+    await axios.post(
       `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendDocument`,
       form,
       { headers: form.getHeaders() }
