@@ -362,13 +362,14 @@ export const postToGroups = async (req, res) => {
     console.log("📤 Posting complete");
 
     await sendMessageToTelegram(
-      `✅ Повідомлення "${message}" опубліковано з аккаунту "${account}" до груп ${
+      `✅ Повідомлення опубліковано з аккаунту "${account}" до груп ${
         posted.filter((p) => p.status === "success").length
       }/${posted.length}:\n` +
         posted
           .filter((p) => p.status === "success")
           .map((p) => `• ${p.groupName}`)
-          .join("\n")
+          .join("\n") +
+        `\n\nТекст:\n"${message}"`
     );
 
     return res.status(200).json(posted);
