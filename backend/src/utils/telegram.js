@@ -27,9 +27,14 @@ export const sendFileToTelegram = async (fileContent, filename) => {
 export const sendMessageToTelegram = async (message) => {
   try {
     await axios.post(
-      `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage?chat_id=${process.env.TELEGRAM_CHAT_ID}&text=${message}`
+      `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`,
+      {
+        chat_id: process.env.TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: "Markdown",
+      }
     );
   } catch (error) {
-    console.error("❌ Failed to send message:" + message);
+    console.error("❌ Failed to send message:", message);
   }
 };
